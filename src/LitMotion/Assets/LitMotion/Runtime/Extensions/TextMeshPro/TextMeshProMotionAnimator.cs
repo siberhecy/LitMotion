@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 using TMPro;
-using LitMotion.Collections;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -13,6 +12,16 @@ using UnityEditor;
 namespace LitMotion.Extensions
 {
     // TODO: optimization
+
+    public delegate void TMPCharacterMotionUpdateAction<T>(T value, int index, ref TMPMotionCharacter character);
+
+    public struct TMPMotionCharacter
+    {
+        public Vector3 Position;
+        public Vector3 Scale;
+        public Quaternion Rotation;
+        public Color Color;
+    }
 
     /// <summary>
     /// Wrapper class for animating individual characters in TextMeshPro.
@@ -48,6 +57,7 @@ namespace LitMotion.Extensions
             if (textToAnimator.TryGetValue(text, out var animator))
             {
                 animator.Reset();
+                animator.refCount++;
                 return animator;
             }
 
@@ -59,6 +69,9 @@ namespace LitMotion.Extensions
             // set target
             animator.target = text;
             animator.Reset();
+
+            // increment ref count
+            animator.refCount++;
 
             // add to array
             if (tail == animators.Length)
@@ -152,32 +165,27 @@ namespace LitMotion.Extensions
         }
 #endif
 
-        internal struct CharInfo
-        {
-            public Vector3 position;
-            public Vector3 scale;
-            public Quaternion rotation;
-            public Color color;
-        }
-
         public TextMeshProMotionAnimator()
         {
-            charInfoArray = new CharInfo[32];
+            charInfoArray = new TMPMotionCharacter[32];
             for (int i = 0; i < charInfoArray.Length; i++)
             {
-                charInfoArray[i].color = Color.white;
-                charInfoArray[i].rotation = Quaternion.identity;
-                charInfoArray[i].scale = Vector3.one;
-                charInfoArray[i].position = Vector3.zero;
+                charInfoArray[i].Color = Color.white;
+                charInfoArray[i].Rotation = Quaternion.identity;
+                charInfoArray[i].Scale = Vector3.one;
+                charInfoArray[i].Position = Vector3.zero;
             }
 
             updateAction = UpdateCore;
+            completeAction = CompleteCore;
         }
 
         TMP_Text target;
         internal readonly Action updateAction;
-        internal CharInfo[] charInfoArray;
+        internal readonly Action completeAction;
+        internal TMPMotionCharacter[] charInfoArray;
         bool isDirty;
+        int refCount;
 
         TextMeshProMotionAnimator nextNode;
 
@@ -193,10 +201,10 @@ namespace LitMotion.Extensions
                 {
                     for (int i = prevLength; i < length; i++)
                     {
-                        charInfoArray[i].color = new(target.color.r, target.color.g, target.color.b, target.color.a);
-                        charInfoArray[i].rotation = Quaternion.identity;
-                        charInfoArray[i].scale = Vector3.one;
-                        charInfoArray[i].position = Vector3.zero;
+                        charInfoArray[i].Color = new(target.color.r, target.color.g, target.color.b, target.color.a);
+                        charInfoArray[i].Rotation = Quaternion.identity;
+                        charInfoArray[i].Scale = Vector3.one;
+                        charInfoArray[i].Position = Vector3.zero;
                     }
                 }
             }
@@ -218,10 +226,10 @@ namespace LitMotion.Extensions
         {
             for (int i = 0; i < charInfoArray.Length; i++)
             {
-                charInfoArray[i].color = new(target.color.r, target.color.g, target.color.b, target.color.a);
-                charInfoArray[i].rotation = Quaternion.identity;
-                charInfoArray[i].scale = Vector3.one;
-                charInfoArray[i].position = Vector3.zero;
+                charInfoArray[i].Color = new(target.color.r, target.color.g, target.color.b, target.color.a);
+                charInfoArray[i].Rotation = Quaternion.identity;
+                charInfoArray[i].Scale = Vector3.one;
+                charInfoArray[i].Position = Vector3.zero;
             }
 
             isDirty = false;
@@ -231,7 +239,7 @@ namespace LitMotion.Extensions
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool TryUpdate()
         {
-            if (target == null) return false;
+            if (target == null || refCount <= 0) return false;
 
             if (isDirty)
             {
@@ -259,7 +267,7 @@ namespace LitMotion.Extensions
                 ref var colors = ref textInfo.meshInfo[materialIndex].colors32;
                 ref var motionCharInfo = ref charInfoArray[i];
 
-                var charColor = motionCharInfo.color;
+                var charColor = motionCharInfo.Color;
                 for (int n = 0; n < 4; n++)
                 {
                     colors[vertexIndex + n] = charColor;
@@ -268,9 +276,9 @@ namespace LitMotion.Extensions
                 var verts = textInfo.meshInfo[materialIndex].vertices;
                 var center = (verts[vertexIndex] + verts[vertexIndex + 2]) * 0.5f;
 
-                var charRotation = motionCharInfo.rotation;
-                var charScale = motionCharInfo.scale;
-                var charOffset = motionCharInfo.position;
+                var charRotation = motionCharInfo.Rotation;
+                var charScale = motionCharInfo.Scale;
+                var charOffset = motionCharInfo.Position;
                 for (int n = 0; n < 4; n++)
                 {
                     var vert = verts[vertexIndex + n];
@@ -288,6 +296,14 @@ namespace LitMotion.Extensions
                 textInfo.meshInfo[i].mesh.vertices = textInfo.meshInfo[i].vertices;
                 target.UpdateGeometry(textInfo.meshInfo[i].mesh, i);
             }
+
+            isDirty = false;
+        }
+
+        void CompleteCore()
+        {
+            UpdateCore();
+            refCount--;
         }
     }
 }
